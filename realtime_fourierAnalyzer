@@ -1,0 +1,136 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+import pyaudio
+import struct
+
+# Audio parameters
+CHUNK = 2048  # Number of audio samples per frame
+FORMAT = pyaudio.paInt16  # Audio format
+CHANNELS = 1  # Mono audio
+RATE = 44100  # Sample rate (Hz)
+
+# Initialize PyAudio
+p = pyaudio.PyAudio()
+
+# Open microphone stream
+stream = p.open(
+    format=FORMAT,
+    channels=CHANNELS,
+    rate=RATE,
+    input=True,
+    frames_per_buffer=CHUNK
+)
+
+print("🎤 Microphone is now listening...")
+print("Speak, sing, or play music near your microphone!")
+print("Close the window to stop.")
+
+# Create figure with subplots
+fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10))
+fig.suptitle('Real-Time Microphone Frequency Analyzer', fontsize=16, fontweight='bold')
+
+# Time domain plot
+x_time = np.arange(0, CHUNK)
+line_time, = ax1.plot(x_time, np.zeros(CHUNK), 'b-', linewidth=1)
+ax1.set_ylim(-32768, 32768)
+ax1.set_xlim(0, CHUNK)
+ax1.set_xlabel('Sample Number', fontsize=10)
+ax1.set_ylabel('Amplitude', fontsize=10)
+ax1.set_title('Time Domain - Raw Audio Signal', fontsize=12)
+ax1.grid(True, alpha=0.3)
+
+# Frequency domain plot (full spectrum)
+x_freq = np.fft.fftfreq(CHUNK, 1/RATE)[:CHUNK//2]
+line_freq, = ax2.plot(x_freq, np.zeros(CHUNK//2), 'r-', linewidth=1.5)
+ax2.set_ylim(0, 1000)
+ax2.set_xlim(0, RATE//2)
+ax2.set_xlabel('Frequency (Hz)', fontsize=10)
+ax2.set_ylabel('Magnitude', fontsize=10)
+ax2.set_title('Frequency Domain - Full Spectrum (Fourier Transform)', fontsize=12)
+ax2.grid(True, alpha=0.3)
+
+# Frequency domain plot (zoomed to human voice range)
+line_freq_zoom, = ax3.plot(x_freq, np.zeros(CHUNK//2), 'g-', linewidth=2)
+ax3.set_ylim(0, 1000)
+ax3.set_xlim(0, 2000)  # Focus on 0-2000 Hz (human voice/music range)
+ax3.set_xlabel('Frequency (Hz)', fontsize=10)
+ax3.set_ylabel('Magnitude', fontsize=10)
+ax3.set_title('Frequency Domain - Zoomed (0-2000 Hz)', fontsize=12)
+ax3.grid(True, alpha=0.3)
+
+# Text to show dominant frequency
+text_freq = ax3.text(0.02, 0.95, '', transform=ax3.transAxes,
+                     fontsize=11, verticalalignment='top',
+                     bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7))
+
+def animate(frame):
+    try:
+        # Read audio data from microphone
+        data = stream.read(CHUNK, exception_on_overflow=False)
+        
+        # Convert byte data to integers
+        data_int = struct.unpack(str(CHUNK) + 'h', data)
+        
+        # Convert to numpy array
+        audio_data = np.array(data_int, dtype='int16')
+        
+        # Update time domain plot
+        line_time.set_ydata(audio_data)
+        
+        # Apply window function to reduce spectral leakage
+        windowed_data = audio_data * np.hamming(CHUNK)
+        
+        # Compute FFT
+        fft_data = np.fft.fft(windowed_data)
+        fft_magnitude = np.abs(fft_data[:CHUNK//2])
+        
+        # Normalize
+        fft_magnitude = fft_magnitude / CHUNK
+        
+        # Update frequency domain plots
+        line_freq.set_ydata(fft_magnitude)
+        line_freq_zoom.set_ydata(fft_magnitude)
+        
+        # Auto-scale y-axis for better visualization
+        max_magnitude = np.max(fft_magnitude)
+        if max_magnitude > 0:
+            ax2.set_ylim(0, max_magnitude * 1.2)
+            ax3.set_ylim(0, max_magnitude * 1.2)
+        
+        # Find dominant frequency
+        # Only consider frequencies above a threshold to avoid noise
+        threshold = np.max(fft_magnitude) * 0.3
+        peaks = np.where(fft_magnitude > threshold)[0]
+        
+        if len(peaks) > 0:
+            dominant_idx = peaks[np.argmax(fft_magnitude[peaks])]
+            dominant_freq = x_freq[dominant_idx]
+            
+            # Update text with dominant frequency
+            text_freq.set_text(f'Dominant Frequency: {dominant_freq:.1f} Hz\n'
+                             f'Magnitude: {fft_magnitude[dominant_idx]:.1f}')
+        else:
+            text_freq.set_text('Dominant Frequency: -- Hz\n(Too quiet or noise)')
+        
+    except Exception as e:
+        print(f"Error: {e}")
+    
+    return line_time, line_freq, line_freq_zoom, text_freq
+
+# Create animation
+anim = FuncAnimation(fig, animate, interval=50, blit=True, cache_frame_data=False)
+
+plt.tight_layout()
+
+# Show the plot
+try:
+    plt.show()
+except KeyboardInterrupt:
+    print("\nStopping...")
+finally:
+    # Clean up
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+    print("Microphone closed. Goodbye! 👋")
